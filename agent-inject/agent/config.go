@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
 	"time"
 )
@@ -132,7 +133,8 @@ func (a *Agent) newConfig(init bool) ([]byte, error) {
 				Namespace: a.Vault.Namespace,
 				MountPath: a.Vault.AuthPath,
 				Config: map[string]interface{}{
-					"role": a.Vault.Role,
+					"role":       a.Vault.Role,
+					"token_path": path.Join(a.ServiceAccountPath, "token"),
 				},
 			},
 			Sinks: []*Sink{
