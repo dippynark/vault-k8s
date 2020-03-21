@@ -129,6 +129,11 @@ const (
 	// projected service account token
 	AnnotationAgentServiceAccountTokenVolumeName = "vault.hashicorp.com/agent-service-account-token-volume-name"
 
+	// AnnotationAgentServiceAccountTokenVolumePath is the optional path to a projected service
+	// account token within a volume named by
+	// "vault.hashicorp.com/agent-service-account-token-volume-name" - the default path is "token"
+	AnnotationAgentServiceAccountTokenVolumePath = "vault.hashicorp.com/agent-service-account-token-volume-path"
+
 	// AnnotationVaultService is the name of the Vault server.  This can be overridden by the
 	// user but will be set by a flag on the deployment.
 	AnnotationVaultService = "vault.hashicorp.com/service"
@@ -287,6 +292,14 @@ func Init(pod *corev1.Pod, cfg AgentConfig) error {
 
 	if _, ok := pod.ObjectMeta.Annotations[AnnotationVaultLogLevel]; !ok {
 		pod.ObjectMeta.Annotations[AnnotationVaultLogLevel] = DefaultAgentLogLevel
+	}
+
+	if _, ok := pod.ObjectMeta.Annotations[AnnotationAgentServiceAccountTokenVolumeName]; !ok {
+		pod.ObjectMeta.Annotations[AnnotationAgentServiceAccountTokenVolumeName] = ""
+	}
+
+	if _, ok := pod.ObjectMeta.Annotations[AnnotationAgentServiceAccountTokenVolumePath]; !ok {
+		pod.ObjectMeta.Annotations[AnnotationAgentServiceAccountTokenVolumePath] = "token"
 	}
 
 	if _, securityContextIsSet = pod.ObjectMeta.Annotations[AnnotationAgentSetSecurityContext]; !securityContextIsSet {
