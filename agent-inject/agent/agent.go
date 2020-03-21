@@ -26,6 +26,7 @@ const (
 	DefaultAgentCacheEnable              = "false"
 	DefaultAgentCacheUseAutoAuthToken    = "true"
 	DefaultAgentCacheListenerPort        = "8200"
+	DefaultServiceAccountPath            = "/var/run/secrets/vault.hashicorp.com/serviceaccount"
 )
 
 // Agent is the top level structure holding all the
@@ -86,14 +87,10 @@ type Agent struct {
 	//found, and the unique name of the secret which will be used for the filename.
 	Secrets []*Secret
 
-	// ServiceAccountName is the Kubernetes service account name for the pod.
-	// This is used when we mount the service account to the  Vault Agent container(s).
-	ServiceAccountName string
-
-	// ServiceAccountPath is the path on disk where the service account JWT
-	// can be located.  This is used when we mount the service account to the
-	// Vault Agent container(s).
-	ServiceAccountPath string
+	// ServiceAccountTokenVolume holds details of a volume mount for a Kubernetes service account
+	// token for the pod. This is used when we mount the service account to the  Vault Agent
+	// container(s).
+	ServiceAccountTokenVolume *ServiceAccountTokenVolume
 
 	// Status is the current injection status.  The only status considered is "injected",
 	// which prevents further mutations.  A user can patch this annotation to force a new
@@ -123,10 +120,21 @@ type Agent struct {
 	// SetSecurityContext controls whether the injected containers have a
 	// SecurityContext set.
 	SetSecurityContext bool
-  
- 	// ExtraSecret is the Kubernetes secret to mount as a volume in the Vault agent container
+
+	// ExtraSecret is the Kubernetes secret to mount as a volume in the Vault agent container
 	// which can be referenced by the Agent config for secrets. Mounted at /vault/custom/
 	ExtraSecret string
+}
+
+type ServiceAccountTokenVolume struct {
+	// The name of the volume
+	Name string
+
+	// The mount path of the volume within vault agent containers
+	MountPath string
+
+	// The path to the JWT token within the volume
+	TokenPath string
 }
 
 type Secret struct {
@@ -219,20 +227,23 @@ func New(pod *corev1.Pod, patches []*jsonpatch.JsonPatchOperation) (*Agent, erro
 	saName, saPath := serviceaccount(pod)
 
 	agent := &Agent{
-		Annotations:        pod.Annotations,
-		ConfigMapName:      pod.Annotations[AnnotationAgentConfigMap],
-		ImageName:          pod.Annotations[AnnotationAgentImage],
-		LimitsCPU:          pod.Annotations[AnnotationAgentLimitsCPU],
-		LimitsMem:          pod.Annotations[AnnotationAgentLimitsMem],
-		Namespace:          pod.Annotations[AnnotationAgentRequestNamespace],
-		Patches:            patches,
-		Pod:                pod,
-		RequestsCPU:        pod.Annotations[AnnotationAgentRequestsCPU],
-		RequestsMem:        pod.Annotations[AnnotationAgentRequestsMem],
-		ServiceAccountName: saName,
-		ServiceAccountPath: saPath,
-		Status:             pod.Annotations[AnnotationAgentStatus],
-		ExtraSecret:        pod.Annotations[AnnotationAgentExtraSecret],
+		Annotations:   pod.Annotations,
+		ConfigMapName: pod.Annotations[AnnotationAgentConfigMap],
+		ImageName:     pod.Annotations[AnnotationAgentImage],
+		LimitsCPU:     pod.Annotations[AnnotationAgentLimitsCPU],
+		LimitsMem:     pod.Annotations[AnnotationAgentLimitsMem],
+		Namespace:     pod.Annotations[AnnotationAgentRequestNamespace],
+		Patches:       patches,
+		Pod:           pod,
+		RequestsCPU:   pod.Annotations[AnnotationAgentRequestsCPU],
+		RequestsMem:   pod.Annotations[AnnotationAgentRequestsMem],
+		ServiceAccountTokenVolume: &ServiceAccountTokenVolume{
+			Name:      saName,
+			MountPath: saPath,
+			TokenPath: pod.Annotations[AnnotationAgentServiceAccountTokenVolumePath],
+		},
+		Status:      pod.Annotations[AnnotationAgentStatus],
+		ExtraSecret: pod.Annotations[AnnotationAgentExtraSecret],
 		Vault: Vault{
 			Address:          pod.Annotations[AnnotationVaultService],
 			AuthPath:         pod.Annotations[AnnotationVaultAuthPath],
@@ -485,7 +496,10 @@ func (a *Agent) Validate() error {
 		return errors.New("namespace missing from request")
 	}
 
-	if a.ServiceAccountName == "" || a.ServiceAccountPath == "" {
+	if a.ServiceAccountTokenVolume == nil ||
+		(a.ServiceAccountTokenVolume.Name == "" ||
+			a.ServiceAccountTokenVolume.MountPath == "" ||
+			a.ServiceAccountTokenVolume.TokenPath == "") {
 		return errors.New("no service account name or path found")
 	}
 
@@ -510,16 +524,28 @@ func (a *Agent) Validate() error {
 }
 
 func serviceaccount(pod *corev1.Pod) (string, string) {
-	var serviceAccountName, serviceAccountPath string
+
+	// Attempt to find existing mount point of named volume and copy mount path
 	if volumeName := pod.ObjectMeta.Annotations[AnnotationAgentServiceAccountTokenVolumeName]; volumeName != "" {
 		for _, container := range pod.Spec.Containers {
-			for _, volumes := range container.VolumeMounts {
-				if volumes.Name == volumeName {
-					return volumes.Name, volumes.MountPath
+			for _, volumeMount := range container.VolumeMounts {
+				if volumeMount.Name == volumeName {
+					return volumeMount.Name, volumeMount.MountPath
 				}
 			}
 		}
 	}
+
+	// Otherwise, check the volume exists and fallback to `DefaultServiceAccountPath`
+	if volumeName := pod.ObjectMeta.Annotations[AnnotationAgentServiceAccountTokenVolumeName]; volumeName != "" {
+		for _, volume := range pod.Spec.Volumes {
+			if volume.Name == volumeName {
+				return volume.Name, DefaultServiceAccountPath
+			}
+		}
+	}
+
+	// Fallback to searching for normal service account token
 	for _, container := range pod.Spec.Containers {
 		for _, volumes := range container.VolumeMounts {
 			if strings.Contains(volumes.MountPath, "serviceaccount") {
@@ -527,7 +553,8 @@ func serviceaccount(pod *corev1.Pod) (string, string) {
 			}
 		}
 	}
-	return serviceAccountName, serviceAccountPath
+
+	return "", ""
 }
 
 func (a *Agent) vaultCliFlags() []string {

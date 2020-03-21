@@ -134,7 +134,7 @@ func (a *Agent) newConfig(init bool) ([]byte, error) {
 				MountPath: a.Vault.AuthPath,
 				Config: map[string]interface{}{
 					"role":       a.Vault.Role,
-					"token_path": path.Join(a.ServiceAccountPath, "token"),
+					"token_path": path.Join(a.ServiceAccountTokenVolume.MountPath, a.ServiceAccountTokenVolume.TokenPath),
 				},
 			},
 			Sinks: []*Sink{
